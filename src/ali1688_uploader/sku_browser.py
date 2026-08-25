@@ -106,12 +106,49 @@ def _fill_axis(page: Any, selector: str, values: list[str]) -> list[str]:
     return committed
 
 
+def _switch_to_spec_quotation(page: Any) -> None:
+    container = page.locator("#guid-quotationType")
+    if not container.count():
+        raise RuntimeError("找不到报价方式组件 #guid-quotationType")
+
+    spec_radio = container.locator("input.ant-radio-input[value='1']")
+    if not spec_radio.count():
+        raise RuntimeError("找不到‘按产品规格报价’ radio(value=1)")
+
+    radio = spec_radio.first
+    if not radio.is_checked():
+        radio.scroll_into_view_if_needed()
+        # Click the label when available so React/Ant Design receives the normal user event chain.
+        label = radio.locator("xpath=ancestor::label[1]")
+        if label.count():
+            label.first.click()
+        else:
+            radio.click(force=True)
+        page.wait_for_timeout(1000)
+
+    if not radio.is_checked():
+        raise RuntimeError("切换到‘按产品规格报价’失败")
+
+
 def _sku_row_count(page: Any) -> int:
     table = page.locator("#guid-skuTable")
     if not table.count() or not table.first.is_visible():
         return 0
     rows = table.locator(".next-table-body tbody tr.next-table-row")
     return rows.count()
+
+
+def _sku_headers(page: Any) -> list[str]:
+    table = page.locator("#guid-skuTable")
+    if not table.count() or not table.first.is_visible():
+        return []
+    headers = table.locator(".next-table-header th .sku-header-label > span:first-child")
+    values: list[str] = []
+    for i in range(headers.count()):
+        text = headers.nth(i).inner_text().strip()
+        if text:
+            values.append(text)
+    return values
 
 
 def fill_sku_axes_and_capture(
@@ -146,6 +183,8 @@ def fill_sku_axes_and_capture(
         page.goto(url, wait_until="domcontentloaded")
         page.wait_for_timeout(1800)
 
+        _switch_to_spec_quotation(page)
+
         axis1_values = [str(v) for v in axes[0].get("values", [])]
         axis2_values = [str(v) for v in axes[1].get("values", [])] if len(axes) > 1 else []
 
@@ -157,6 +196,8 @@ def fill_sku_axes_and_capture(
         matrix_visible = bool(sku_table.count() and sku_table.first.is_visible())
         matrix_rows = _sku_row_count(page)
         expected_rows = len(axis1_values) * max(1, len(axis2_values))
+        headers = _sku_headers(page)
+        spec_price_visible = any("单价" in h or "价格" in h for h in headers)
 
         controls = page.locator(
             "input, textarea, select, button, [role='button'], [contenteditable='true']"
@@ -170,6 +211,7 @@ def fill_sku_axes_and_capture(
         result = {
             "source": str(normalized_path),
             "sku_count": normalized.get("sku_count", len(normalized.get("rows", []))),
+            "quotation_mode": "specification",
             "axis1": axis1_committed,
             "axis2": axis2_committed,
             "common_specs": normalized.get("common_specs", []),
@@ -177,11 +219,13 @@ def fill_sku_axes_and_capture(
             "matrix_rows": matrix_rows,
             "expected_rows": expected_rows,
             "matrix_complete": matrix_visible and matrix_rows == expected_rows,
+            "sku_headers": headers,
+            "spec_price_visible": spec_price_visible,
             "output_dir": str(out),
             "screenshot": str(out / "page.png"),
             "controls": str(out / "controls.json"),
             "html": str(out / "page.html"),
-            "status": "sku-axes-filled-not-submitted",
+            "status": "sku-spec-quotation-captured-not-submitted",
         }
         (out / "result.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -191,7 +235,11 @@ def fill_sku_axes_and_capture(
             raise RuntimeError(
                 f"SKU 矩阵未完整生成：实际 {matrix_rows} 行，预期 {expected_rows} 行。证据已保存到 {out}"
             )
+        if not result["spec_price_visible"]:
+            raise RuntimeError(
+                f"已切换按产品规格报价，但 SKU 表未出现单价/价格列；headers={headers!r}。证据已保存到 {out}"
+            )
 
-        print("SKU 规格轴已完整填写，未提交商品。请在浏览器检查生成的 SKU 矩阵，完成后回终端按 Enter。")
+        print("已切换按产品规格报价并生成完整 SKU 矩阵，未提交商品。请检查单价列，完成后回终端按 Enter。")
         input()
         return result
