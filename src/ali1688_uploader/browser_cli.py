@@ -15,6 +15,7 @@ from .browser_automation import (
     publish_one_browser,
 )
 from .io import load_products
+from .sku_browser import fill_sku_axes_and_capture
 from .sku_importer import import_husky_xlsx, save_normalized_json
 
 
@@ -72,6 +73,17 @@ def cmd_sku_import(path: str, output: str | None, sheet: str | None) -> int:
         "stock_total": sum(row["stock"] for row in data["rows"]),
     }
     _print_json(summary)
+    return 0
+
+
+def cmd_sku_fill(path: str, url: str, profile: str) -> int:
+    result = fill_sku_axes_and_capture(
+        path,
+        url=url,
+        profile_path=profile,
+        options=BrowserOptions.from_env(),
+    )
+    _print_json(result)
     return 0
 
 
@@ -140,6 +152,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_sku.add_argument("--sheet", help="工作表名称；默认第一个工作表")
     p_sku.add_argument("--output", help="标准化 JSON 输出路径")
 
+    p_sku_fill = sub.add_parser(
+        "sku-fill",
+        help="把标准化 SKU 的两个规格轴填写到 1688，并抓取生成后的 SKU 矩阵",
+    )
+    p_sku_fill.add_argument("path", help="sku-import 生成的 normalized.json")
+    p_sku_fill.add_argument("--url", required=True, help="当前真实 1688 发布页完整 URL")
+    p_sku_fill.add_argument(
+        "--profile",
+        default="browser_profiles/1688-current.json",
+        help="当前发布页 selector profile JSON",
+    )
+
     p_publish = sub.add_parser("publish", help="按 selector profile 填写/提交商品表单")
     p_publish.add_argument("path")
     p_publish.add_argument(
@@ -178,6 +202,8 @@ def main() -> int:
             return cmd_plan(args.path, args.limit)
         if args.command == "sku-import":
             return cmd_sku_import(args.path, args.output, args.sheet)
+        if args.command == "sku-fill":
+            return cmd_sku_fill(args.path, args.url, args.profile)
         if args.command == "publish":
             return cmd_publish(
                 args.path,
