@@ -23,3 +23,14 @@ def to_product_add_params(product: Product) -> dict:
         "saleInfo": product.sale_info.model_dump(exclude_none=True),
         "shippingInfo": product.shipping_info.model_dump(exclude_none=True),
     }
+
+
+def to_product_edit_patch(product: Product) -> dict:
+    """
+    生成 ProductInfo 的可覆盖字段。
+    edit 接口会先读取线上 ProductInfo，再用这些字段覆盖，避免丢失
+    groupID/status/periodOfValidity 等当前模型未维护的字段。
+    """
+    params = to_product_add_params(product).copy()
+    params.pop("webSite", None)
+    return params
