@@ -61,15 +61,11 @@ class SelectorProfile:
 
 @contextmanager
 def persistent_context(options: BrowserOptions) -> Iterator[Any]:
-    """Launch a persistent Playwright browser context.
-
-    The persistent profile stores cookies/session state locally under runtime/.
-    We intentionally do not add stealth plugins, CAPTCHA bypass, or fingerprint spoofing.
-    """
+    """Launch a persistent Playwright browser context."""
 
     try:
         from playwright.sync_api import sync_playwright
-    except ImportError as exc:  # pragma: no cover - defensive message for end users
+    except ImportError as exc:
         raise RuntimeError(
             "缺少 Playwright。请执行 `pip install -e .`，然后执行 "
             "`python -m playwright install chromium`。"
@@ -93,8 +89,6 @@ def persistent_context(options: BrowserOptions) -> Iterator[Any]:
 
 
 def manual_login(url: str | None = None, *, options: BrowserOptions | None = None) -> None:
-    """Open seller workbench and let the user complete login manually once."""
-
     options = options or BrowserOptions.from_env()
     target = (url or os.getenv("ALI1688_BROWSER_HOME_URL") or DEFAULT_SELLER_URL).strip()
     with persistent_context(options) as context:
@@ -138,12 +132,6 @@ def inspect_page(
     output_root: str | Path = DEFAULT_INSPECT_DIR,
     pause_seconds: float = 2.0,
 ) -> Path:
-    """Capture the current publish page DOM/control metadata and screenshot.
-
-    This is the calibration step for a changing 1688 seller UI. The artifacts stay
-    under runtime/ and are ignored by Git.
-    """
-
     if not url.strip():
         raise ValueError("browser-inspect 必须提供商品发布页 URL")
 
@@ -181,8 +169,6 @@ def inspect_page(
 
 
 def browser_plan(product: Product, source_path: str | Path | None = None) -> dict[str, Any]:
-    """Return a side-effect-free browser publishing plan."""
-
     base = Path(source_path).resolve().parent if source_path else Path.cwd()
     resolved_images: list[str] = []
     missing_images: list[str] = []
@@ -221,14 +207,28 @@ def browser_plan(product: Product, source_path: str | Path | None = None) -> dic
     }
 
 
-def _fill_if_configured(page: Any, selectors: dict[str, str], key: str, value: Any) -> bool:
+def _fill_if_configured(
+    page: Any,
+    selectors: dict[str, str],
+    key: str,
+    value: Any,
+    *,
+    commit_events: bool = False,
+) -> str | None:
     selector = selectors.get(key)
     if not selector or value is None:
-        return False
+        return None
     locator = page.locator(selector).first
     locator.wait_for(state="visible")
+    locator.scroll_into_view_if_needed()
+    locator.click()
     locator.fill(str(value))
-    return True
+    if commit_events:
+        locator.dispatch_event("input")
+        locator.dispatch_event("change")
+        locator.press("Tab")
+        page.wait_for_timeout(500)
+    return locator.input_value()
 
 
 def _first_sku_price(product: Product) -> float | None:
@@ -249,29 +249,53 @@ def fill_product_form(
     *,
     source_path: str | Path,
 ) -> dict[str, Any]:
-    """Fill fields described by the selector profile.
-
-    Dynamic category and multi-SKU editors are intentionally profile-driven because
-    their DOM differs by category/account and changes over time.
-    """
-
     selectors = profile.selectors
     actions: list[str] = []
+    readback: dict[str, str] = {}
 
-    if _fill_if_configured(page, selectors, "subject", product.subject):
+    subject_value = _fill_if_configured(page, selectors, "subject", product.subject)
+    if subject_value is not None:
         actions.append("subject")
-    if _fill_if_configured(page, selectors, "description", product.description):
+        readback["subject"] = subject_value
+
+    description_value = _fill_if_configured(
+        page, selectors, "description", product.description, commit_events=True
+    )
+    if description_value is not None:
         actions.append("description")
-    if _fill_if_configured(page, selectors, "price", _first_sku_price(product)):
+        readback["description"] = description_value
+
+    price_value = _fill_if_configured(
+        page, selectors, "price", _first_sku_price(product), commit_events=True
+    )
+    if price_value is not None:
         actions.append("price")
-    if _fill_if_configured(page, selectors, "stock", product.sale_info.amountOnSale):
+        readback["price"] = price_value
+
+    stock_value = _fill_if_configured(
+        page, selectors, "stock", product.sale_info.amountOnSale, commit_events=True
+    )
+    if stock_value is not None:
         actions.append("stock")
-    if _fill_if_configured(page, selectors, "unit", product.sale_info.unit):
+        readback["stock"] = stock_value
+
+    unit_value = _fill_if_configured(
+        page, selectors, "unit", product.sale_info.unit, commit_events=True
+    )
+    if unit_value is not None:
         actions.append("unit")
-    if _fill_if_configured(
-        page, selectors, "min_order_quantity", product.sale_info.minOrderQuantity
-    ):
+        readback["unit"] = unit_value
+
+    min_order_value = _fill_if_configured(
+        page,
+        selectors,
+        "min_order_quantity",
+        product.sale_info.minOrderQuantity,
+        commit_events=True,
+    )
+    if min_order_value is not None:
         actions.append("min_order_quantity")
+        readback["min_order_quantity"] = min_order_value
 
     image_selector = selectors.get("image_input")
     if image_selector:
@@ -287,9 +311,11 @@ def fill_product_form(
         page.locator(image_selector).first.set_input_files(image_paths)
         actions.append(f"images:{len(image_paths)}")
 
+    page.wait_for_timeout(1000)
     return {
         "external_id": product.external_id,
         "actions": actions,
+        "readback": readback,
         "unhandled": [
             "category" if "category" not in selectors else None,
             "attributes" if "attributes" not in selectors else None,
@@ -326,9 +352,7 @@ def publish_one_browser(
         page = context.pages[0] if context.pages else context.new_page()
         page.goto(profile.publish_url, wait_until="domcontentloaded")
         page.wait_for_timeout(1500)
-        result = fill_product_form(
-            page, product, profile, source_path=source_path
-        )
+        result = fill_product_form(page, product, profile, source_path=source_path)
 
         evidence_dir = Path("runtime/browser-evidence")
         evidence_dir.mkdir(parents=True, exist_ok=True)
