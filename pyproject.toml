@@ -12,6 +12,7 @@ dependencies = [
   "python-dotenv>=1.0,<2",
   "pydantic>=2.8,<3",
   "playwright>=1.50,<2",
+  "openpyxl>=3.1,<4",
 ]
 
 [tool.setuptools]

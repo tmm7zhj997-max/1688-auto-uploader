@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from .browser_automation import (
     BrowserOptions,
@@ -14,6 +15,7 @@ from .browser_automation import (
     publish_one_browser,
 )
 from .io import load_products
+from .sku_importer import import_husky_xlsx, save_normalized_json
 
 
 def _print_json(value: object) -> None:
@@ -46,6 +48,30 @@ def cmd_plan(path: str, limit: int | None) -> int:
         products = products[:limit]
     for product in products:
         _print_json(browser_plan(product, path))
+    return 0
+
+
+def cmd_sku_import(path: str, output: str | None, sheet: str | None) -> int:
+    data = import_husky_xlsx(path, sheet_name=sheet)
+    if output:
+        target = save_normalized_json(data, output)
+    else:
+        source = Path(path)
+        target = save_normalized_json(
+            data,
+            Path("runtime/sku-import") / f"{source.stem}.normalized.json",
+        )
+    summary = {
+        "source": path,
+        "output": str(target),
+        "sku_count": data["sku_count"],
+        "axes": data["axes"],
+        "common_specs": data["common_specs"],
+        "price_min": min(row["price"] for row in data["rows"]),
+        "price_max": max(row["price"] for row in data["rows"]),
+        "stock_total": sum(row["stock"] for row in data["rows"]),
+    }
+    _print_json(summary)
     return 0
 
 
@@ -109,6 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_plan.add_argument("path")
     p_plan.add_argument("--limit", type=int)
 
+    p_sku = sub.add_parser("sku-import", help="导入哈士奇导出的 SKU Excel 并标准化")
+    p_sku.add_argument("path", help="哈士奇导出的 .xlsx 文件")
+    p_sku.add_argument("--sheet", help="工作表名称；默认第一个工作表")
+    p_sku.add_argument("--output", help="标准化 JSON 输出路径")
+
     p_publish = sub.add_parser("publish", help="按 selector profile 填写/提交商品表单")
     p_publish.add_argument("path")
     p_publish.add_argument(
@@ -145,6 +176,8 @@ def main() -> int:
             return cmd_inspect(args.url)
         if args.command == "plan":
             return cmd_plan(args.path, args.limit)
+        if args.command == "sku-import":
+            return cmd_sku_import(args.path, args.output, args.sheet)
         if args.command == "publish":
             return cmd_publish(
                 args.path,
