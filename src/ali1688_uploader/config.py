@@ -12,6 +12,8 @@ class Settings:
     app_secret: str
     access_token: str
 
+    refresh_token: str = ""
+    redirect_uri: str = ""
     gateway: str = "https://gw.open.1688.com"
     api_version: str = "1"
     timeout_seconds: int = 30
@@ -32,6 +34,8 @@ class Settings:
             app_key=os.getenv("ALI1688_APP_KEY", "").strip(),
             app_secret=os.getenv("ALI1688_APP_SECRET", "").strip(),
             access_token=os.getenv("ALI1688_ACCESS_TOKEN", "").strip(),
+            refresh_token=os.getenv("ALI1688_REFRESH_TOKEN", "").strip(),
+            redirect_uri=os.getenv("ALI1688_REDIRECT_URI", "").strip(),
             gateway=os.getenv("ALI1688_GATEWAY", "https://gw.open.1688.com").rstrip("/"),
             api_version=os.getenv("ALI1688_API_VERSION", "1").strip() or "1",
             timeout_seconds=int(os.getenv("ALI1688_TIMEOUT_SECONDS", "30")),

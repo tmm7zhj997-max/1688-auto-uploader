@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 import sys
 
 from .client import Alibaba1688Client
@@ -9,6 +10,7 @@ from .config import Settings
 from .images import validate_image_file
 from .io import load_products
 from .mapper import to_product_add_params, to_product_edit_patch
+from .oauth import Alibaba1688OAuthClient, build_authorization_url, write_tokens_to_env
 from .publisher import publish_batch
 from .stock import parse_sku_changes, product_stock_change, sku_stock_change
 
@@ -17,8 +19,74 @@ def _live_client() -> Alibaba1688Client:
     return Alibaba1688Client(Settings.from_env(require_live=True))
 
 
+def _oauth_client() -> tuple[Alibaba1688OAuthClient, Settings]:
+    settings = Settings.from_env(require_live=False)
+    return Alibaba1688OAuthClient(settings), settings
+
+
 def _print_json(data: object) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _resolve_redirect_uri(settings: Settings, value: str | None) -> str:
+    redirect_uri = (value or settings.redirect_uri).strip()
+    if not redirect_uri:
+        raise RuntimeError("缺少 redirect URI；设置 ALI1688_REDIRECT_URI 或传 --redirect-uri")
+    return redirect_uri
+
+
+def _handle_token_result(result, write_env: str | None) -> int:
+    if write_env:
+        path = write_tokens_to_env(write_env, result)
+        summary = result.safe_summary()
+        summary["saved_to"] = str(path)
+        _print_json(summary)
+        print("Token 已写入本地 dotenv 文件；不要提交该文件。")
+    else:
+        print("警告：以下输出包含 access/refresh token，请勿粘贴到 issue、PR 或聊天记录。")
+        _print_json(result.raw)
+    return 0
+
+
+def cmd_auth_url(redirect_uri: str | None, state: str | None) -> int:
+    settings = Settings.from_env(require_live=False)
+    if not settings.app_key:
+        raise RuntimeError("缺少 ALI1688_APP_KEY")
+    redirect = _resolve_redirect_uri(settings, redirect_uri)
+    oauth_state = state or secrets.token_urlsafe(24)
+    _print_json(
+        {
+            "authorization_url": build_authorization_url(
+                settings.app_key,
+                redirect,
+                state=oauth_state,
+            ),
+            "state": oauth_state,
+            "redirect_uri": redirect,
+        }
+    )
+    print("打开 authorization_url 完成授权，并确认回调里的 state 与上面一致。")
+    return 0
+
+
+def cmd_token_exchange(
+    code: str,
+    redirect_uri: str | None,
+    write_env: str | None,
+) -> int:
+    client, settings = _oauth_client()
+    redirect = _resolve_redirect_uri(settings, redirect_uri)
+    result = client.exchange_code(code, redirect)
+    return _handle_token_result(result, write_env)
+
+
+def cmd_token_refresh(refresh_token: str | None, write_env: str | None) -> int:
+    client, settings = _oauth_client()
+    token = (refresh_token or settings.refresh_token).strip()
+    if not token:
+        raise RuntimeError("缺少 refresh token；设置 ALI1688_REFRESH_TOKEN 或传 --refresh-token")
+    result = client.refresh_access_token(token)
+    return _handle_token_result(result, write_env)
 
 
 def cmd_validate(path: str) -> int:
@@ -195,6 +263,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="1688 自动上架商品")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p_auth = sub.add_parser("auth-url", help="生成 1688 OAuth 授权链接")
+    p_auth.add_argument("--redirect-uri")
+    p_auth.add_argument("--state")
+
+    p_exchange = sub.add_parser("token-exchange", help="使用授权 code 换取 token")
+    p_exchange.add_argument("code")
+    p_exchange.add_argument("--redirect-uri")
+    p_exchange.add_argument(
+        "--write-env",
+        metavar="PATH",
+        help="把 token 安全写入本地 dotenv 文件，例如 .env；不在终端显示 token",
+    )
+
+    p_refresh = sub.add_parser("token-refresh", help="使用 refresh token 刷新 access token")
+    p_refresh.add_argument("--refresh-token")
+    p_refresh.add_argument(
+        "--write-env",
+        metavar="PATH",
+        help="把新 token 写入本地 dotenv 文件，例如 .env",
+    )
+
     p_validate = sub.add_parser("validate", help="校验商品数据")
     p_validate.add_argument("path")
 
@@ -259,6 +348,12 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        if args.command == "auth-url":
+            return cmd_auth_url(args.redirect_uri, args.state)
+        if args.command == "token-exchange":
+            return cmd_token_exchange(args.code, args.redirect_uri, args.write_env)
+        if args.command == "token-refresh":
+            return cmd_token_refresh(args.refresh_token, args.write_env)
         if args.command == "validate":
             return cmd_validate(args.path)
         if args.command == "plan":
