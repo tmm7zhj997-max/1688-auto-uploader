@@ -29,28 +29,89 @@ def _load_normalized(path: str | Path) -> dict[str, Any]:
     return payload
 
 
+def _axis_state(page: Any, selector: str) -> list[dict[str, Any]]:
+    return page.locator(selector).evaluate_all(
+        """
+        (inputs) => inputs.map((input) => {
+          const item = input.closest('.value-select-item');
+          const rect = input.getBoundingClientRect();
+          return {
+            value: input.value || '',
+            resident: !!(item && item.classList.contains('resident')),
+            visible: !!(rect.width || rect.height) && getComputedStyle(input).visibility !== 'hidden'
+          };
+        })
+        """
+    )
+
+
+def _committed_values(page: Any, selector: str) -> list[str]:
+    return [
+        str(item["value"])
+        for item in _axis_state(page, selector)
+        if item.get("visible") and not item.get("resident") and str(item.get("value") or "").strip()
+    ]
+
+
+def _resident_input(page: Any, selector: str) -> Any:
+    candidates = page.locator(selector)
+    count = candidates.count()
+    for index in range(count - 1, -1, -1):
+        locator = candidates.nth(index)
+        if not locator.is_visible():
+            continue
+        value = locator.input_value().strip()
+        resident = locator.evaluate(
+            "el => !!(el.closest('.value-select-item') && el.closest('.value-select-item').classList.contains('resident'))"
+        )
+        if resident and not value:
+            return locator
+    raise RuntimeError(f"找不到可写入的空白 resident 规格输入框: {selector}")
+
+
 def _commit_spec_value(page: Any, selector: str, value: str) -> None:
-    # 1688 spec inputs re-render after each committed value, so reacquire every time.
-    locator = page.locator(selector).first
-    locator.wait_for(state="visible")
+    before = set(_committed_values(page, selector))
+    locator = _resident_input(page, selector)
     locator.scroll_into_view_if_needed()
     locator.click()
     locator.fill(value)
     locator.dispatch_event("input")
     locator.dispatch_event("change")
     locator.press("Enter")
-    page.wait_for_timeout(450)
+    page.wait_for_timeout(350)
+
+    # Some 1688 spec controls (notably size) only finalize a custom value on blur.
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+    page.wait_for_timeout(550)
+
+    after = set(_committed_values(page, selector))
+    if value not in after:
+        state = _axis_state(page, selector)
+        raise RuntimeError(
+            f"规格值没有完成提交: {value!r}; before={sorted(before)!r}; state={state!r}"
+        )
 
 
 def _fill_axis(page: Any, selector: str, values: list[str]) -> list[str]:
-    committed: list[str] = []
-    for raw in values:
-        value = str(raw).strip()
-        if not value:
+    wanted = [str(raw).strip() for raw in values if str(raw).strip()]
+    for value in wanted:
+        if value in _committed_values(page, selector):
             continue
         _commit_spec_value(page, selector, value)
-        committed.append(value)
+
+    committed = _committed_values(page, selector)
+    missing = [value for value in wanted if value not in committed]
+    if missing:
+        raise RuntimeError(f"规格轴提交不完整，缺少: {missing!r}; 已提交: {committed!r}")
     return committed
+
+
+def _sku_row_count(page: Any) -> int:
+    table = page.locator("#guid-skuTable")
+    if not table.count() or not table.first.is_visible():
+        return 0
+    rows = table.locator(".next-table-body tbody tr.next-table-row")
+    return rows.count()
 
 
 def fill_sku_axes_and_capture(
@@ -93,9 +154,9 @@ def fill_sku_axes_and_capture(
 
         page.wait_for_timeout(1800)
         sku_table = page.locator("#guid-skuTable")
-        matrix_visible = False
-        if sku_table.count():
-            matrix_visible = sku_table.first.is_visible()
+        matrix_visible = bool(sku_table.count() and sku_table.first.is_visible())
+        matrix_rows = _sku_row_count(page)
+        expected_rows = len(axis1_values) * max(1, len(axis2_values))
 
         controls = page.locator(
             "input, textarea, select, button, [role='button'], [contenteditable='true']"
@@ -113,6 +174,9 @@ def fill_sku_axes_and_capture(
             "axis2": axis2_committed,
             "common_specs": normalized.get("common_specs", []),
             "matrix_visible": matrix_visible,
+            "matrix_rows": matrix_rows,
+            "expected_rows": expected_rows,
+            "matrix_complete": matrix_visible and matrix_rows == expected_rows,
             "output_dir": str(out),
             "screenshot": str(out / "page.png"),
             "controls": str(out / "controls.json"),
@@ -123,6 +187,11 @@ def fill_sku_axes_and_capture(
             json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-        print("SKU 规格轴已填写，未提交商品。请在浏览器检查生成的 SKU 矩阵，完成后回终端按 Enter。")
+        if not result["matrix_complete"]:
+            raise RuntimeError(
+                f"SKU 矩阵未完整生成：实际 {matrix_rows} 行，预期 {expected_rows} 行。证据已保存到 {out}"
+            )
+
+        print("SKU 规格轴已完整填写，未提交商品。请在浏览器检查生成的 SKU 矩阵，完成后回终端按 Enter。")
         input()
         return result
