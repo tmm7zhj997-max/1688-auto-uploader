@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -69,6 +70,27 @@ class TokenResult:
             "resource_owner": self.resource_owner,
             "member_id": self.member_id,
         }
+
+
+def write_tokens_to_env(path: str | Path, result: TokenResult) -> Path:
+    """Upsert access/refresh tokens into a local dotenv file."""
+    path = Path(path)
+    existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    managed = {"ALI1688_ACCESS_TOKEN", "ALI1688_REFRESH_TOKEN"}
+    kept = [
+        line
+        for line in existing
+        if not any(line.startswith(f"{key}=") for key in managed)
+    ]
+    kept.append(f"ALI1688_ACCESS_TOKEN={result.access_token}")
+    if result.refresh_token:
+        kept.append(f"ALI1688_REFRESH_TOKEN={result.refresh_token}")
+    path.write_text("\n".join(kept).rstrip() + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return path
 
 
 class Alibaba1688OAuthClient:
