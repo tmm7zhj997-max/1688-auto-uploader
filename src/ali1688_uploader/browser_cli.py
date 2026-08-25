@@ -52,6 +52,7 @@ def cmd_plan(path: str, limit: int | None) -> int:
 def cmd_publish(
     path: str,
     profile_path: str,
+    url: str | None,
     limit: int | None,
     commit: bool,
     fill_only: bool,
@@ -63,6 +64,12 @@ def cmd_publish(
         raise ValueError("--fill-only 为人工检查模式，一次只能处理 1 个商品；请加 --limit 1")
 
     profile = SelectorProfile.load(profile_path)
+    if url:
+        profile = SelectorProfile(
+            publish_url=url.strip(),
+            selectors=profile.selectors,
+            wait_after_submit_ms=profile.wait_after_submit_ms,
+        )
     failed = 0
     for product in products:
         try:
@@ -109,6 +116,10 @@ def build_parser() -> argparse.ArgumentParser:
         default="browser_profiles/1688-current.json",
         help="当前发布页 selector profile JSON",
     )
+    p_publish.add_argument(
+        "--url",
+        help="覆盖 profile 中的发布页 URL；建议粘贴当前真实发布页完整 URL",
+    )
     p_publish.add_argument("--limit", type=int)
     mode = p_publish.add_mutually_exclusive_group()
     mode.add_argument(
@@ -138,6 +149,7 @@ def main() -> int:
             return cmd_publish(
                 args.path,
                 args.profile,
+                args.url,
                 args.limit,
                 args.commit,
                 args.fill_only,
