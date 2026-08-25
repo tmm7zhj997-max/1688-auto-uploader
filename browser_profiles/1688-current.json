@@ -3,6 +3,8 @@
   "wait_after_submit_ms": 5000,
   "selectors": {
     "subject": "input[placeholder^='建议使用通俗的产品名称']",
+    "price": "#guid-priceRange tbody tr:first-child td[data-next-table-col='2'] input",
+    "min_order_quantity": "#guid-priceRange tbody tr:first-child td[data-next-table-col='1'] input",
     "sku_color": "input[placeholder='请输入或选择颜色']",
     "sku_size": "input[placeholder='请输入尺寸']:visible",
     "unit_combobox": "input[role='combobox'][aria-valuetext='米']",
