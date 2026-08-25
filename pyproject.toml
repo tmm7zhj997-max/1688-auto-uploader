@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ali1688-auto-uploader"
-version = "0.1.0"
-description = "1688 product publishing automation via Alibaba Open Platform"
+version = "0.2.0"
+description = "1688 product publishing automation via Open Platform and Playwright browser workflows"
 requires-python = ">=3.10"
 dependencies = [
   "requests>=2.32,<3",
   "python-dotenv>=1.0,<2",
   "pydantic>=2.8,<3",
+  "playwright>=1.50,<2",
 ]
 
 [tool.setuptools]

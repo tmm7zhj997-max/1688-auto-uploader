@@ -1,0 +1,14 @@
+{
+  "publish_url": "",
+  "wait_after_submit_ms": 3000,
+  "selectors": {
+    "subject": "",
+    "description": "",
+    "image_input": "",
+    "price": "",
+    "stock": "",
+    "unit": "",
+    "min_order_quantity": "",
+    "submit": ""
+  }
+}
