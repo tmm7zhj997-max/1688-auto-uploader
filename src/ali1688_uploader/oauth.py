@@ -108,17 +108,46 @@ class Alibaba1688OAuthClient:
             raise RuntimeError("缺少 OAuth 配置: " + ", ".join(missing))
 
     def _decode(self, response: requests.Response) -> TokenResult:
-        response.raise_for_status()
         try:
             payload = response.json()
-        except ValueError as exc:
-            raise RuntimeError(
-                f"1688 OAuth 返回非 JSON，HTTP {response.status_code}"
-            ) from exc
+        except ValueError:
+            payload = None
+
+        if response.status_code >= 400:
+            if isinstance(payload, dict):
+                safe_error = {
+                    key: payload.get(key)
+                    for key in (
+                        "error",
+                        "error_code",
+                        "error_description",
+                        "errorMessage",
+                        "message",
+                    )
+                    if payload.get(key) is not None
+                }
+                raise RuntimeError(
+                    f"1688 OAuth HTTP {response.status_code}: {safe_error or 'request failed'}"
+                )
+            raise RuntimeError(f"1688 OAuth HTTP {response.status_code}: request failed")
+
         if not isinstance(payload, dict):
-            raise RuntimeError("1688 OAuth 返回格式不是 JSON object")
+            raise RuntimeError(
+                f"1688 OAuth 返回非 JSON object，HTTP {response.status_code}"
+            )
         if payload.get("error") or payload.get("error_code") or payload.get("errorMessage"):
-            raise RuntimeError(f"1688 OAuth 返回错误: {payload}")
+            safe_error = {
+                key: payload.get(key)
+                for key in (
+                    "error",
+                    "error_code",
+                    "error_description",
+                    "errorMessage",
+                    "message",
+                )
+                if payload.get(key) is not None
+            }
+            raise RuntimeError(f"1688 OAuth 返回错误: {safe_error}")
         return TokenResult.from_payload(payload)
 
     def exchange_code(self, code: str, redirect_uri: str) -> TokenResult:
