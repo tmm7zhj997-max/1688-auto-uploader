@@ -15,8 +15,8 @@ from .browser_automation import (
     publish_one_browser,
 )
 from .io import load_products
-from .sku_browser import fill_sku_axes_and_capture
 from .sku_importer import import_husky_xlsx, save_normalized_json
+from .sku_matrix import fill_sku_prices_and_stock
 
 
 def _print_json(value: object) -> None:
@@ -76,11 +76,12 @@ def cmd_sku_import(path: str, output: str | None, sheet: str | None) -> int:
     return 0
 
 
-def cmd_sku_fill(path: str, url: str, profile: str) -> int:
-    result = fill_sku_axes_and_capture(
+def cmd_sku_fill(path: str, url: str, profile: str, sku_stock: int) -> int:
+    result = fill_sku_prices_and_stock(
         path,
         url=url,
         profile_path=profile,
+        fixed_stock=sku_stock,
         options=BrowserOptions.from_env(),
     )
     _print_json(result)
@@ -154,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_sku_fill = sub.add_parser(
         "sku-fill",
-        help="把标准化 SKU 的两个规格轴填写到 1688，并抓取生成后的 SKU 矩阵",
+        help="把标准化 SKU 填写到 1688：规格轴、批发价和固定可售数量；不提交商品",
     )
     p_sku_fill.add_argument("path", help="sku-import 生成的 normalized.json")
     p_sku_fill.add_argument("--url", required=True, help="当前真实 1688 发布页完整 URL")
@@ -162,6 +163,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         default="browser_profiles/1688-current.json",
         help="当前发布页 selector profile JSON",
+    )
+    p_sku_fill.add_argument(
+        "--sku-stock",
+        type=int,
+        default=1000,
+        help="每个 SKU 行固定填写的可售数量，默认 1000",
     )
 
     p_publish = sub.add_parser("publish", help="按 selector profile 填写/提交商品表单")
@@ -203,7 +210,7 @@ def main() -> int:
         if args.command == "sku-import":
             return cmd_sku_import(args.path, args.output, args.sheet)
         if args.command == "sku-fill":
-            return cmd_sku_fill(args.path, args.url, args.profile)
+            return cmd_sku_fill(args.path, args.url, args.profile, args.sku_stock)
         if args.command == "publish":
             return cmd_publish(
                 args.path,
