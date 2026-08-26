@@ -117,17 +117,23 @@ def _switch_to_spec_quotation(page: Any) -> None:
 
     radio = spec_radio.first
     if not radio.is_checked():
-        # Ant Design keeps the real radio input visually hidden. Scrolling that input
-        # causes Playwright to wait forever for visibility, so scroll/click the label.
-        label = radio.locator("xpath=ancestor::label[1]")
-        if label.count():
-            label.first.scroll_into_view_if_needed()
-            label.first.click()
-        else:
-            # Fallback: dispatch a DOM click on the hidden input so React still sees
-            # the normal click/change event chain without requiring visibility.
-            radio.evaluate("el => el.click()")
-        page.wait_for_timeout(1000)
+        # Ant Design hides the real radio input and, on some 1688 layouts, the
+        # label may also be outside Playwright's visible/actionable box. Do not
+        # use scroll_into_view_if_needed() here; dispatch a DOM click instead.
+        container.evaluate("el => el.scrollIntoView({block: 'center', inline: 'nearest'})")
+        page.wait_for_timeout(300)
+        radio.evaluate(
+            """
+            el => {
+              const label = el.closest('label');
+              const target = label || el;
+              target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+              target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+              target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            }
+            """
+        )
+        page.wait_for_timeout(1200)
 
     if not radio.is_checked():
         raise RuntimeError("切换到‘按产品规格报价’失败")
