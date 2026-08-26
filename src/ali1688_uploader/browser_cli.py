@@ -16,7 +16,7 @@ from .browser_automation import (
 )
 from .io import load_products
 from .sku_importer import import_husky_xlsx, save_normalized_json
-from .sku_matrix_logistics_confirm import fill_sku_prices_and_stock
+from .sku_matrix_logistics_weight_g import fill_sku_prices_and_stock
 
 
 def _print_json(value: object) -> None:
