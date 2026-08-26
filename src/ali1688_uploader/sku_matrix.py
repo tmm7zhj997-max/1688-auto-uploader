@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,12 @@ IGNORED_SPEC_HEADERS = (
 )
 
 
+DELIVERY_PATTERNS = ("72小时", "72 小时", "三天发货", "3天发货", "三天", "3天", "72")
+EXCHANGE_TEXT = "7天包换"
+RETURN_TEXT = "7天无理由退货"
+SERVICE_PACKAGE_TEXT = "不支持"
+
+
 def _format_price(value: Any) -> str:
     number = float(value)
     text = f"{number:.2f}".rstrip("0").rstrip(".")
@@ -68,7 +75,7 @@ def _spec_column_indices(headers: list[str]) -> list[int]:
 
 def _row_cell_texts(row: Any) -> list[str]:
     return row.locator("td").evaluate_all(
-        """
+        r"""
         cells => cells.map(cell => (cell.innerText || '').replace(/\s+/g, ' ').trim())
         """
     )
@@ -97,6 +104,184 @@ def _input_value(locator: Any) -> str:
         return locator.input_value().strip()
     except Exception:
         return ""
+
+
+def _click_visible_option_by_text(page: Any, patterns: tuple[str, ...]) -> str | None:
+    pattern = re.compile("|".join(re.escape(text) for text in patterns))
+    options = page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option")
+    count = options.count()
+    for index in range(count):
+        option = options.nth(index)
+        try:
+            text = (option.inner_text() or "").strip()
+        except Exception:
+            text = ""
+        if text and pattern.search(text):
+            option.click()
+            page.wait_for_timeout(700)
+            return text
+    clicked = page.evaluate(
+        """
+        patterns => {
+          const dropdowns = [...document.querySelectorAll('.ant-select-dropdown')]
+            .filter(el => !el.classList.contains('ant-select-dropdown-hidden'));
+          for (const dropdown of dropdowns) {
+            const options = [...dropdown.querySelectorAll('.ant-select-item-option')];
+            for (const option of options) {
+              const text = (option.innerText || '').trim();
+              if (patterns.some(pattern => text.includes(pattern))) {
+                option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                option.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                return text;
+              }
+            }
+          }
+          return null;
+        }
+        """,
+        list(patterns),
+    )
+    if clicked:
+        page.wait_for_timeout(700)
+    return clicked
+
+
+def _select_delivery_time(page: Any) -> dict[str, Any]:
+    block = page.locator("#guid-buyerProtection")
+    if not block.count():
+        raise RuntimeError("未找到买家保障/服务与承诺区块 #guid-buyerProtection")
+
+    block.first.evaluate("el => el.scrollIntoView({block: 'center', inline: 'nearest'})")
+    page.wait_for_timeout(300)
+
+    trigger = page.locator("#guid-buyerProtection .ant-select-selector").filter(has_text="请选择发货时间")
+    if not trigger.count():
+        trigger = page.locator("#guid-buyerProtection input[aria-controls^='rc_select_']").locator(
+            "xpath=ancestor::div[contains(@class, 'ant-select-selector')][1]"
+        )
+    if not trigger.count():
+        raise RuntimeError("未找到服务与承诺里的发货时间下拉框")
+
+    trigger.first.click()
+    page.wait_for_timeout(700)
+    selected = _click_visible_option_by_text(page, DELIVERY_PATTERNS)
+    if not selected:
+        raise RuntimeError("发货时间下拉框已打开，但没有找到 72小时/三天发货 选项")
+
+    current = page.locator("#guid-buyerProtection").evaluate(
+        r"""
+        el => {
+          const table = [...el.querySelectorAll('table')].find(t => (t.innerText || '').includes('发货时间'));
+          return table ? (table.innerText || '').replace(/\s+/g, ' ').trim() : '';
+        }
+        """
+    )
+    return {"target": "72小时", "selected": selected, "table_text": current}
+
+
+def _click_radio_in_service(page: Any, *, section_label: str, option_text: str) -> dict[str, Any]:
+    result = page.evaluate(
+        """
+        ({ sectionLabel, optionText }) => {
+          const wrappers = [...document.querySelectorAll('#guid-buyerProtection .service-wrapper')];
+          const wrapper = wrappers.find(el => (el.innerText || '').includes(sectionLabel));
+          if (!wrapper) {
+            return { ok: false, section: sectionLabel, option: optionText, error: 'section_not_found' };
+          }
+          const labels = [...wrapper.querySelectorAll('label')];
+          const label = labels.find(el => (el.innerText || '').includes(optionText));
+          if (!label) {
+            return { ok: false, section: sectionLabel, option: optionText, error: 'option_not_found', text: wrapper.innerText || '' };
+          }
+          const input = label.querySelector('input[type="radio"]');
+          if (!input) {
+            return { ok: false, section: sectionLabel, option: optionText, error: 'radio_missing' };
+          }
+          if (input.disabled) {
+            return { ok: false, section: sectionLabel, option: optionText, error: 'radio_disabled' };
+          }
+          if (!input.checked) {
+            label.scrollIntoView({ block: 'center', inline: 'nearest' });
+            label.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            label.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            label.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+          }
+          return { ok: true, section: sectionLabel, option: optionText, checked: input.checked || true };
+        }
+        """,
+        {"sectionLabel": section_label, "optionText": option_text},
+    )
+    page.wait_for_timeout(500)
+    if not result.get("ok"):
+        raise RuntimeError(f"无法选择 {section_label} -> {option_text}: {result!r}")
+    return result
+
+
+def _check_all_available_quality_services(page: Any) -> dict[str, Any]:
+    result = page.evaluate(
+        """
+        () => {
+          const wrappers = [...document.querySelectorAll('#guid-buyerProtection .service-wrapper')];
+          const wrapper = wrappers.find(el => (el.innerText || '').includes('品质服务'));
+          if (!wrapper) {
+            return { ok: false, error: 'quality_section_not_found' };
+          }
+          const checked = [];
+          const skipped = [];
+          const labels = [...wrapper.querySelectorAll('label.ant-checkbox-wrapper')];
+          for (const label of labels) {
+            const input = label.querySelector('input[type="checkbox"]');
+            const text = (label.innerText || '').replace(/\\s+/g, ' ').trim();
+            if (!input) {
+              skipped.push({ text, reason: 'checkbox_missing' });
+              continue;
+            }
+            if (input.disabled || label.classList.contains('ant-checkbox-wrapper-disabled')) {
+              skipped.push({ text, value: input.value || '', reason: 'disabled_or_not_opened' });
+              continue;
+            }
+            if (!input.checked) {
+              label.scrollIntoView({ block: 'center', inline: 'nearest' });
+              label.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+              label.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+              label.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            }
+            checked.push({ text, value: input.value || '', checked: true });
+          }
+          return { ok: true, checked, skipped };
+        }
+        """
+    )
+    page.wait_for_timeout(700)
+    if not result.get("ok"):
+        raise RuntimeError(f"无法勾选品质服务: {result!r}")
+    if not result.get("checked"):
+        raise RuntimeError(f"品质服务没有可勾选项: {result!r}")
+    return result
+
+
+def _fill_service_commitments(page: Any) -> dict[str, Any]:
+    block = page.locator("#guid-buyerProtection")
+    if not block.count():
+        raise RuntimeError("未找到买家保障/服务与承诺区块 #guid-buyerProtection")
+    block.first.evaluate("el => el.scrollIntoView({block: 'center', inline: 'nearest'})")
+    page.wait_for_timeout(500)
+
+    delivery = _select_delivery_time(page)
+    exchange = _click_radio_in_service(page, section_label="包换服务", option_text=EXCHANGE_TEXT)
+    returns = _click_radio_in_service(page, section_label="退货服务", option_text=RETURN_TEXT)
+    quality = _check_all_available_quality_services(page)
+    package = _click_radio_in_service(page, section_label="服务包", option_text=SERVICE_PACKAGE_TEXT)
+
+    page.wait_for_timeout(1000)
+    return {
+        "delivery_time": delivery,
+        "exchange_service": exchange,
+        "return_service": returns,
+        "quality_services": quality,
+        "service_package": package,
+    }
 
 
 def fill_sku_prices_and_stock(
@@ -203,6 +388,20 @@ def fill_sku_prices_and_stock(
                 }
             )
 
+        bad_readback = [
+            item
+            for item in filled
+            if item["price_actual"] != item["price_expected"] or item["stock_actual"] != item["stock_expected"]
+        ]
+        if missing:
+            raise RuntimeError(f"有 SKU 行没有匹配到哈士奇数据：{missing!r}。证据已保存到 {out}")
+        if bad_readback:
+            raise RuntimeError(f"有 SKU 行写入后读回不一致：{bad_readback!r}。证据已保存到 {out}")
+        if len(filled) != expected_rows:
+            raise RuntimeError(f"SKU 填写数量不完整：实际 {len(filled)}，预期 {expected_rows}。证据已保存到 {out}")
+
+        services = _fill_service_commitments(page)
+
         controls = page.locator(
             "input, textarea, select, button, [role='button'], [contenteditable='true']"
         ).evaluate_all(_control_snapshot_script())
@@ -210,11 +409,6 @@ def fill_sku_prices_and_stock(
         (out / "page.html").write_text(page.content(), encoding="utf-8")
         page.screenshot(path=str(out / "page.png"), full_page=True)
 
-        bad_readback = [
-            item
-            for item in filled
-            if item["price_actual"] != item["price_expected"] or item["stock_actual"] != item["stock_expected"]
-        ]
         result = {
             "source": str(normalized_path),
             "sku_count": normalized.get("sku_count", len(rows_data)),
@@ -234,22 +428,16 @@ def fill_sku_prices_and_stock(
             "filled_count": len(filled),
             "missing_rows": missing,
             "bad_readback": bad_readback,
+            "services": services,
             "readback": filled,
             "output_dir": str(out),
             "screenshot": str(out / "page.png"),
             "controls": str(out / "controls.json"),
             "html": str(out / "page.html"),
-            "status": "sku-price-stock-filled-not-submitted",
+            "status": "sku-price-stock-services-filled-not-submitted",
         }
         (out / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        if missing:
-            raise RuntimeError(f"有 SKU 行没有匹配到哈士奇数据：{missing!r}。证据已保存到 {out}")
-        if bad_readback:
-            raise RuntimeError(f"有 SKU 行写入后读回不一致：{bad_readback!r}。证据已保存到 {out}")
-        if len(filled) != expected_rows:
-            raise RuntimeError(f"SKU 填写数量不完整：实际 {len(filled)}，预期 {expected_rows}。证据已保存到 {out}")
-
-        print("SKU 批发价和可售数量已填写，未提交商品。请在浏览器检查后回终端按 Enter。")
+        print("SKU 批发价、可售数量和服务与承诺已填写，未提交商品。请在浏览器检查后回终端按 Enter。")
         input()
         return result
