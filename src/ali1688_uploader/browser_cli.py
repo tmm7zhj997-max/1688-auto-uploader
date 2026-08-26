@@ -16,7 +16,7 @@ from .browser_automation import (
 )
 from .io import load_products
 from .sku_importer import import_husky_xlsx, save_normalized_json
-from .sku_matrix_logistics_weight_g import fill_sku_prices_and_stock
+from .sku_matrix_detail_text import fill_sku_prices_and_stock
 
 
 def _print_json(value: object) -> None:
@@ -155,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_sku_fill = sub.add_parser(
         "sku-fill",
-        help="把标准化 SKU 填写到 1688：规格轴、批发价、固定可售数量、服务与物流；不提交商品",
+        help="把标准化 SKU 填写到 1688：规格轴、批发价、固定可售数量、服务、物流和详情；不提交商品",
     )
     p_sku_fill.add_argument("path", help="sku-import 生成的 normalized.json")
     p_sku_fill.add_argument("--url", required=True, help="当前真实 1688 发布页完整 URL")
