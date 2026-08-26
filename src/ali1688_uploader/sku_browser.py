@@ -160,6 +160,11 @@ def _sku_headers(page: Any) -> list[str]:
     return values
 
 
+def _has_sku_price_header(headers: list[str]) -> bool:
+    price_keywords = ("单价", "价格", "批发价", "报价")
+    return any(any(keyword in header for keyword in price_keywords) for header in headers)
+
+
 def fill_sku_axes_and_capture(
     normalized_path: str | Path,
     *,
@@ -206,7 +211,7 @@ def fill_sku_axes_and_capture(
         matrix_rows = _sku_row_count(page)
         expected_rows = len(axis1_values) * max(1, len(axis2_values))
         headers = _sku_headers(page)
-        spec_price_visible = any("单价" in h or "价格" in h for h in headers)
+        spec_price_visible = _has_sku_price_header(headers)
 
         controls = page.locator(
             "input, textarea, select, button, [role='button'], [contenteditable='true']"
@@ -246,9 +251,9 @@ def fill_sku_axes_and_capture(
             )
         if not result["spec_price_visible"]:
             raise RuntimeError(
-                f"已切换按产品规格报价，但 SKU 表未出现单价/价格列；headers={headers!r}。证据已保存到 {out}"
+                f"已切换按产品规格报价，但 SKU 表未出现价格列；headers={headers!r}。证据已保存到 {out}"
             )
 
-        print("已切换按产品规格报价并生成完整 SKU 矩阵，未提交商品。请检查单价列，完成后回终端按 Enter。")
+        print("已切换按产品规格报价并生成完整 SKU 矩阵，未提交商品。请检查批发价/价格列，完成后回终端按 Enter。")
         input()
         return result
