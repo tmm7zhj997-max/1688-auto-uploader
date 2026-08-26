@@ -117,13 +117,16 @@ def _switch_to_spec_quotation(page: Any) -> None:
 
     radio = spec_radio.first
     if not radio.is_checked():
-        radio.scroll_into_view_if_needed()
-        # Click the label when available so React/Ant Design receives the normal user event chain.
+        # Ant Design keeps the real radio input visually hidden. Scrolling that input
+        # causes Playwright to wait forever for visibility, so scroll/click the label.
         label = radio.locator("xpath=ancestor::label[1]")
         if label.count():
+            label.first.scroll_into_view_if_needed()
             label.first.click()
         else:
-            radio.click(force=True)
+            # Fallback: dispatch a DOM click on the hidden input so React still sees
+            # the normal click/change event chain without requiring visibility.
+            radio.evaluate("el => el.click()")
         page.wait_for_timeout(1000)
 
     if not radio.is_checked():
