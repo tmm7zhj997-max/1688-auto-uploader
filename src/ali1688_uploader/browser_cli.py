@@ -76,12 +76,23 @@ def cmd_sku_import(path: str, output: str | None, sheet: str | None) -> int:
     return 0
 
 
-def cmd_sku_fill(path: str, url: str, profile: str, sku_stock: int) -> int:
+def cmd_sku_fill(
+    path: str,
+    url: str,
+    profile: str,
+    sku_stock: int,
+    asset_dir: str | None,
+    main_image_dir: str | None,
+    detail_image_dir: str | None,
+) -> int:
     result = fill_sku_prices_and_stock(
         path,
         url=url,
         profile_path=profile,
         fixed_stock=sku_stock,
+        asset_dir=asset_dir,
+        main_image_dir=main_image_dir,
+        detail_image_dir=detail_image_dir,
         options=BrowserOptions.from_env(),
     )
     _print_json(result)
@@ -155,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_sku_fill = sub.add_parser(
         "sku-fill",
-        help="把标准化 SKU 填写到 1688：规格轴、批发价、固定可售数量、服务、物流和详情；不提交商品",
+        help="把标准化 SKU 填写到 1688：规格轴、批发价、固定可售数量、服务、物流和图片素材；不提交商品",
     )
     p_sku_fill.add_argument("path", help="sku-import 生成的 normalized.json")
     p_sku_fill.add_argument("--url", required=True, help="当前真实 1688 发布页完整 URL")
@@ -169,6 +180,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1000,
         help="每个 SKU 行固定填写的可售数量，默认 1000",
+    )
+    p_sku_fill.add_argument(
+        "--asset-dir",
+        help="商品素材根目录；默认识别其下的 主图、详情图、SKU 子文件夹",
+    )
+    p_sku_fill.add_argument(
+        "--main-image-dir",
+        help="商品主图文件夹；指定后优先于 --asset-dir\\主图",
+    )
+    p_sku_fill.add_argument(
+        "--detail-image-dir",
+        help="详情图文件夹；指定后优先于 --asset-dir\\详情图",
     )
 
     p_publish = sub.add_parser("publish", help="按 selector profile 填写/提交商品表单")
@@ -210,7 +233,15 @@ def main() -> int:
         if args.command == "sku-import":
             return cmd_sku_import(args.path, args.output, args.sheet)
         if args.command == "sku-fill":
-            return cmd_sku_fill(args.path, args.url, args.profile, args.sku_stock)
+            return cmd_sku_fill(
+                args.path,
+                args.url,
+                args.profile,
+                args.sku_stock,
+                args.asset_dir,
+                args.main_image_dir,
+                args.detail_image_dir,
+            )
         if args.command == "publish":
             return cmd_publish(
                 args.path,
